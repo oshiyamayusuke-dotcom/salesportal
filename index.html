@@ -73,6 +73,19 @@ body {
   background: linear-gradient(135deg,#0066cc,#004db3); color: #fff; font-size: 13px; font-weight: 700;
 }
 
+/* ===== バックアップ ===== */
+.backup { margin-top: 30px; background: #fff; border-radius: 18px; padding: 22px 24px; box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.backup-head { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+.backup-note { font-size: 13px; color: #888; line-height: 1.6; margin-bottom: 14px; }
+.backup-note.warn { color: #b45309; font-weight: 700; }
+.backup-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+.backup-btns button {
+  flex: 1 1 180px; min-height: 46px; padding: 10px 16px; border-radius: 10px; cursor: pointer;
+  font-size: 14px; font-weight: 700; font-family: inherit; border: 1.5px solid #0066cc;
+}
+#exportBtn { background: #0066cc; color: #fff; }
+#importBtn { background: #fff; color: #0066cc; }
+
 /* ===== ツール表示 ===== */
 #toolScreen { display: none; flex-direction: column; height: 100vh; height: 100dvh; }
 #toolScreen.active { display: flex; }
@@ -168,6 +181,16 @@ body {
         <h3>得意先攻略ダッシュボード</h3>
         <p>売上CSVから得意先ごとの売上・粗利・前年比・最終取引・休眠状況・主要メーカーを一覧化します。</p>
         <div class="go">開く →</div>
+      </div>
+    </div>
+
+    <div class="backup">
+      <div class="backup-head">💾 目標・メモのバックアップ</div>
+      <p class="backup-note" id="backupNote">全ツールの目標・得意先メモ・列設定を1つのファイルに保存します。HTMLを新しくした後は「読み込み」で元に戻せます。</p>
+      <div class="backup-btns">
+        <button id="exportBtn">⬇ 書き出し（保存）</button>
+        <button id="importBtn">⬆ 読み込み（復元）</button>
+        <input type="file" id="importInput" style="display:none">
       </div>
     </div>
   </div>
@@ -272,6 +295,71 @@ document.getElementById("backBtn").onclick = function(){
   f.src = "about:blank";
   show("pickerScreen");
 };
+
+// ==== 目標・メモのバックアップ（各ツールの localStorage をまとめて書き出し／読み込み） ====
+// ツールは srcdoc で開くためポータルと同じ保存領域を使う。ログイン状態だけは対象外。
+var BACKUP_SKIP = [AUTH_KEY];
+var TARGET_KEYS = ["salesDashV3", "salesDashV2", "zensha_targets"];
+
+function collectSettings(){
+  var data = {};
+  for (var i = 0; i < localStorage.length; i++){
+    var k = localStorage.key(i);
+    if (BACKUP_SKIP.indexOf(k) < 0) data[k] = localStorage.getItem(k);
+  }
+  return data;
+}
+
+function refreshBackupNote(){
+  var has = false;
+  try { has = TARGET_KEYS.some(function(k){ var v = localStorage.getItem(k); return v && v !== "{}"; }); } catch(e){}
+  var n = document.getElementById("backupNote");
+  if (!has){
+    n.textContent = "⚠ この端末にはまだ目標が保存されていません。HTMLを新しくした場合は「読み込み」で前回書き出したファイルを選ぶと元に戻ります。";
+    n.classList.add("warn");
+  } else {
+    n.textContent = "全ツールの目標・得意先メモ・列設定を1つのファイルに保存します。目標を変えたら「書き出し」しておくと、HTMLを新しくした後に「読み込み」で戻せます。";
+    n.classList.remove("warn");
+  }
+}
+
+document.getElementById("exportBtn").onclick = function(){
+  var data;
+  try { data = collectSettings(); } catch(e){ alert("保存データを読み取れませんでした。"); return; }
+  if (!Object.keys(data).length){ alert("書き出す目標・メモがまだありません。"); return; }
+  var payload = JSON.stringify({ app: "営業ツールポータル", savedAt: new Date().toISOString(), data: data }, null, 1);
+  var d = new Date(), pad = function(n){ return (n < 10 ? "0" : "") + n; };
+  var name = "営業ツール_目標バックアップ_" + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + ".json";
+  var url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+  var a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+};
+
+document.getElementById("importBtn").onclick = function(){ document.getElementById("importInput").click(); };
+document.getElementById("importInput").onchange = function(e){
+  var f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  var r = new FileReader();
+  r.onload = function(){
+    var p;
+    try { p = JSON.parse(r.result); } catch(err){ alert("バックアップファイルではありません（読み込めませんでした）。"); return; }
+    if (!p || p.app !== "営業ツールポータル" || typeof p.data !== "object"){ alert("営業ツールのバックアップファイルではありません。"); return; }
+    var when = p.savedAt ? new Date(p.savedAt).toLocaleString("ja-JP") : "不明";
+    if (!confirm(when + " に書き出した目標・メモで、この端末の内容を上書きします。よろしいですか？")) return;
+    var n = 0;
+    try {
+      Object.keys(p.data).forEach(function(k){
+        if (BACKUP_SKIP.indexOf(k) < 0 && typeof p.data[k] === "string"){ localStorage.setItem(k, p.data[k]); n++; }
+      });
+    } catch(err){ alert("復元に失敗しました：" + err.message); return; }
+    refreshBackupNote();
+    alert("復元しました（" + n + "件）。ツールを開くと目標が反映されています。");
+  };
+  r.readAsText(f);
+};
+
+refreshBackupNote();
 
 // ==== 起動時：3時間以内にログイン済みならパスワードを省略 ====
 if (isAuthed()) { show("pickerScreen"); } else { show("loginScreen"); }
